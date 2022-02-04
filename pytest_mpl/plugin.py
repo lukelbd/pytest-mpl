@@ -301,18 +301,24 @@ class ImageComparison:
         """
         return get_marker(item, 'mpl_image_compare')
 
-    def generate_filename(self, item):
+    def generate_filename(self, item, fig_num=None):
         """
         Given a pytest item, generate the figure filename.
         """
+        # Include figure number suffix if test generated multiple figures
+        if fig_num is None:
+            suffix = '.png'
+        else:
+            suffix = '_%02d.png' % fig_num  # supportu
+
         if self.config.getini('mpl-use-full-test-name'):
-            filename = self.generate_test_name(item) + '.png'
+            filename = self.generate_test_name(item) + suffix
         else:
             compare = self.get_compare(item)
             # Find test name to use as plot name
             filename = compare.kwargs.get('filename', None)
             if filename is None:
-                filename = item.name + '.png'
+                filename = item.name + suffix
 
         filename = str(pathify(filename))
         return filename
@@ -367,14 +373,14 @@ class ImageComparison:
 
         return baseline_dir
 
-    def obtain_baseline_image(self, item, target_dir):
+    def obtain_baseline_image(self, item, fig_num=None):
         """
         Copy the baseline image to our working directory.
 
         If the image is remote it is downloaded, if it is local it is copied to
         ensure it is kept in the event of a test failure.
         """
-        filename = self.generate_filename(item)
+        filename = self.generate_filename(item, fig_num)
         baseline_dir = self.get_baseline_directory(item)
         baseline_remote = (isinstance(baseline_dir, str) and  # noqa
                            baseline_dir.startswith(('http://', 'https://')))
@@ -387,7 +393,7 @@ class ImageComparison:
 
         return baseline_image
 
-    def generate_baseline_image(self, item, fig):
+    def generate_baseline_image(self, item, fig, fig_num=None):
         """
         Generate reference figures.
         """
@@ -397,7 +403,7 @@ class ImageComparison:
         if not os.path.exists(self.generate_dir):
             os.makedirs(self.generate_dir)
 
-        fig.savefig(str((self.generate_dir / self.generate_filename(item)).absolute()),
+        fig.savefig(str((self.generate_dir / self.generate_filename(item, fig_num)).absolute()),
                     **savefig_kwargs)
 
         close_mpl_figure(fig)
@@ -420,7 +426,7 @@ class ImageComparison:
         close_mpl_figure(fig)
         return out
 
-    def compare_image_to_baseline(self, item, fig, result_dir):
+    def compare_image_to_baseline(self, item, fig, result_dir, fig_num=None):
         """
         Compare a test image to a baseline image.
         """
@@ -431,7 +437,7 @@ class ImageComparison:
         tolerance = compare.kwargs.get('tolerance', 2)
         savefig_kwargs = compare.kwargs.get('savefig_kwargs', {})
 
-        baseline_image_ref = self.obtain_baseline_image(item, result_dir)
+        baseline_image_ref = self.obtain_baseline_image(item, result_dir, fig_num)
 
         test_image = (result_dir / "result.png").absolute()
         fig.savefig(str(test_image), **savefig_kwargs)
@@ -465,7 +471,7 @@ class ImageComparison:
         with open(str(library_path)) as fp:
             return json.load(fp)
 
-    def compare_image_to_hash_library(self, item, fig, result_dir):
+    def compare_image_to_hash_library(self, item, fig, result_dir, fig_num=None):
         new_test = False
         hash_comparison_pass = False
         baseline_image_path = None
@@ -511,13 +517,13 @@ class ImageComparison:
             baseline_error = None
             # Ignore Errors here as it's possible the reference image dosen't exist yet.
             try:
-                baseline_image_path = self.obtain_baseline_image(item, result_dir)
+                baseline_image_path = self.obtain_baseline_image(item, result_dir, fig_num)
                 baseline_image = baseline_image_path
                 if baseline_image and not baseline_image.exists():
                     baseline_image = None
                 # Get the baseline and generate a diff image, always so that
                 # --mpl-results-always can be respected.
-                baseline_comparison = self.compare_image_to_baseline(item, fig, result_dir)
+                baseline_comparison = self.compare_image_to_baseline(item, fig, result_dir, fig_num)
             except Exception as e:
                 baseline_image = None
                 baseline_error = e
@@ -545,7 +551,6 @@ class ImageComparison:
     def pytest_runtest_setup(self, item):  # noqa
 
         compare = self.get_compare(item)
-
         if compare is None:
             return
 
@@ -560,13 +565,15 @@ class ImageComparison:
         remove_text = compare.kwargs.get('remove_text', False)
         backend = compare.kwargs.get('backend', 'agg')
 
+        test_name = self.generate_test_name(item)
         original = item.function
 
         @wraps(item.function)
         def item_function_wrapper(*args, **kwargs):
+            # Ensure no figures present
+            plt.close('all')
 
             with plt.style.context(style, after_reset=True), switch_backend(backend):
-
                 # Run test and get figure object
                 if inspect.ismethod(original):  # method
                     # In some cases, for example if setup_method is used,
@@ -574,19 +581,34 @@ class ImageComparison:
                     # class that is not the same as args[0], and args[0] is the
                     # one that has the correct attributes set up from setup_method
                     # so we ignore original.__self__ and use args[0] instead.
-                    fig = original.__func__(*args, **kwargs)
+                    result = original.__func__(*args, **kwargs)
                 else:  # function
-                    fig = original(*args, **kwargs)
+                    result = original(*args, **kwargs)
 
+            # Support figure return, figure list return, or auto detection
+            if hasattr(result, 'savefig'):
+                nums = [None]
+                figs = [result]
+            elif isinstance(result, (list, tuple)) and all(hasattr(fig, 'savefig') for fig in result):
+                nums = range(1, len(result) + 1)
+                figs = list(result)
+            elif result is None:
+                nums = list(plt.get_fignums())
+                figs = [plt.figure(num) for num in nums]
+            else:
+                pytest.fail("Test must return None or an object with savefig.")
+            if not figs:
+                pytest.skip("Skipping test, since no new figures.")
+
+            for fig, fig_num in zip(figs, nums):
+                # Sanitize figure
                 if remove_text:
                     remove_ticks_and_titles(fig)
-
-                test_name = self.generate_test_name(item)
 
                 # What we do now depends on whether we are generating the
                 # reference images or simply running the test.
                 if self.generate_dir is not None:
-                    self.generate_baseline_image(item, fig)
+                    self.generate_baseline_image(item, fig, fig_num)
                     if self.generate_hash_library is None:
                         pytest.skip("Skipping test, since generating image.")
 
@@ -599,11 +621,11 @@ class ImageComparison:
 
                     # Compare to hash library
                     if self.hash_library or compare.kwargs.get('hash_library', None):
-                        msg = self.compare_image_to_hash_library(item, fig, result_dir)
+                        msg = self.compare_image_to_hash_library(item, fig, result_dir, fig_num)
 
                     # Compare against a baseline if specified
                     else:
-                        msg = self.compare_image_to_baseline(item, fig, result_dir)
+                        msg = self.compare_image_to_baseline(item, fig, result_dir, fig_num)
 
                     close_mpl_figure(fig)
 
