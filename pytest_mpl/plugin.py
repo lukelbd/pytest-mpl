@@ -131,6 +131,9 @@ def pytest_addoption(parser):
     group = parser.getgroup("matplotlib image comparison")
     group.addoption('--mpl', action='store_true',
                     help="Enable comparison of matplotlib figures to reference files")
+    group.addoption('--mpl-generate', action='store_true',
+                    help="generate reference images using the directory specified "
+                    "in the pytest marker")
     group.addoption('--mpl-generate-path',
                     help="directory to generate reference images in, relative "
                     "to location where py.test is run", action='store')
@@ -171,10 +174,12 @@ def pytest_configure(config):
                             "mpl_image_compare: Compares matplotlib figures "
                             "against a baseline image")
 
-    if (config.getoption("--mpl") or
-            config.getoption("--mpl-generate-path") is not None or
-            config.getoption("--mpl-generate-hash-library") is not None):
+    if (config.getoption("--mpl")
+            or config.getoption("--mpl-generate")
+            or config.getoption("--mpl-generate-path") is not None
+            or config.getoption("--mpl-generate-hash-library") is not None):
 
+        generate = config.getoption("--mpl-generate")
         baseline_dir = config.getoption("--mpl-baseline-path")
         generate_dir = config.getoption("--mpl-generate-path")
         generate_hash_lib = config.getoption("--mpl-generate-hash-library")
@@ -207,6 +212,7 @@ def pytest_configure(config):
             results_dir = os.path.abspath(results_dir)
 
         config.pluginmanager.register(ImageComparison(config,
+                                                      generate=generate,
                                                       baseline_dir=baseline_dir,
                                                       baseline_relative_dir=baseline_relative_dir,
                                                       generate_dir=generate_dir,
@@ -265,6 +271,7 @@ class ImageComparison:
 
     def __init__(self,
                  config,
+                 generate=False,
                  baseline_dir=None,
                  baseline_relative_dir=None,
                  generate_dir=None,
@@ -275,6 +282,7 @@ class ImageComparison:
                  results_always=False
                  ):
         self.config = config
+        self.generate = generate
         self.baseline_dir = baseline_dir
         self.baseline_relative_dir = path_is_not_none(baseline_relative_dir)
         self.generate_dir = path_is_not_none(generate_dir)
@@ -399,12 +407,15 @@ class ImageComparison:
         """
         compare = self.get_compare(item)
         savefig_kwargs = compare.kwargs.get('savefig_kwargs', {})
+        base = self.generate_dir
+        file = self.generate_filename(item, fig_num)
 
-        if not os.path.exists(self.generate_dir):
-            os.makedirs(self.generate_dir)
+        if base is None:  # arrived here via self.generate
+            base = self.get_baseline_directory(item)
+        if not os.path.exists(base):
+            os.makedirs(base)
 
-        fig.savefig(str((self.generate_dir / self.generate_filename(item, fig_num)).absolute()),
-                    **savefig_kwargs)
+        fig.savefig(str((base / file).absolute()), **savefig_kwargs)
 
         close_mpl_figure(fig)
 
@@ -607,7 +618,7 @@ class ImageComparison:
 
                 # What we do now depends on whether we are generating the
                 # reference images or simply running the test.
-                if self.generate_dir is not None:
+                if self.generate or self.generate_dir is not None:
                     self.generate_baseline_image(item, fig, fig_num)
                     if self.generate_hash_library is None:
                         pytest.skip("Skipping test, since generating image.")
@@ -616,7 +627,7 @@ class ImageComparison:
                     self._generated_hash_library[test_name] = self.generate_image_hash(item, fig)
 
                 # Only test figures if not generating images
-                if self.generate_dir is None:
+                if not self.generate and self.generate_dir is None:
                     result_dir = self.make_test_results_dir(item)
 
                     # Compare to hash library
