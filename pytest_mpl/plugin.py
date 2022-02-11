@@ -581,35 +581,37 @@ class ImageComparison:
 
         @wraps(item.function)
         def item_function_wrapper(*args, **kwargs):
-            # Ensure no figures present
+            # Ensure no figures present at start
             plt.close('all')
 
             with plt.style.context(style, after_reset=True), switch_backend(backend):
                 # Run test and get figure object
+                # In some cases, for example if setup_method is used,
+                # original appears to belong to an instance of the test
+                # class that is not the same as args[0], and args[0] is the
+                # one that has the correct attributes set up from setup_method
+                # so we ignore original.__self__ and use args[0] instead.
                 if inspect.ismethod(original):  # method
-                    # In some cases, for example if setup_method is used,
-                    # original appears to belong to an instance of the test
-                    # class that is not the same as args[0], and args[0] is the
-                    # one that has the correct attributes set up from setup_method
-                    # so we ignore original.__self__ and use args[0] instead.
                     result = original.__func__(*args, **kwargs)
                 else:  # function
                     result = original(*args, **kwargs)
 
-            # Support figure return, figure list return, or auto detection
-            if hasattr(result, 'savefig'):
-                nums = [None]
-                figs = [result]
-            elif isinstance(result, (list, tuple)) and all(hasattr(fig, 'savefig') for fig in result):
-                nums = range(1, len(result) + 1)
-                figs = list(result)
-            elif result is None:
-                nums = list(plt.get_fignums())
-                figs = [plt.figure(num) for num in nums]
-            else:
-                pytest.fail("Test must return None or an object with savefig.")
-            if not figs:
-                pytest.skip("Skipping test, since no new figures.")
+                # Support figure return, figure list return, or auto detection
+                # Critical to keep this inside switch_backend because backend
+                # change can close figures and remove numbers.
+                if hasattr(result, 'savefig'):
+                    nums = [None]
+                    figs = [result]
+                elif isinstance(result, (list, tuple)) and all(hasattr(fig, 'savefig') for fig in result):
+                    nums = range(1, len(result) + 1)
+                    figs = list(result)
+                elif result is None:
+                    nums = list(plt.get_fignums())
+                    figs = [plt.figure(num) for num in nums]
+                else:
+                    pytest.fail("Test must return None or an object with savefig.")
+                if not figs:
+                    pytest.skip("Skipping test, since no new figures.")
 
             for fig, fig_num in zip(figs, nums):
                 # Sanitize figure
