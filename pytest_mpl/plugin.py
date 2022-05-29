@@ -448,14 +448,14 @@ class ImageComparison:
         tolerance = compare.kwargs.get('tolerance', 2)
         savefig_kwargs = compare.kwargs.get('savefig_kwargs', {})
 
-        baseline_image_ref = self.obtain_baseline_image(item, result_dir, fig_num)
+        baseline_image_ref = self.obtain_baseline_image(item, fig_num)
 
         test_image = (result_dir / "result.png").absolute()
         fig.savefig(str(test_image), **savefig_kwargs)
 
         if not os.path.exists(baseline_image_ref):
-            return ("Image file not found for comparison test in: \n\t"
-                    f"{self.get_baseline_directory(item)}\n"
+            return (f"Image file not found for comparison test at: \n\t"
+                    f"{baseline_image_ref}: \n"
                     "(This is expected for new tests.)\n"
                     "Generated Image: \n\t"
                     f"{test_image}")
@@ -528,7 +528,7 @@ class ImageComparison:
             baseline_error = None
             # Ignore Errors here as it's possible the reference image dosen't exist yet.
             try:
-                baseline_image_path = self.obtain_baseline_image(item, result_dir, fig_num)
+                baseline_image_path = self.obtain_baseline_image(item, fig_num)
                 baseline_image = baseline_image_path
                 if baseline_image and not baseline_image.exists():
                     baseline_image = None
